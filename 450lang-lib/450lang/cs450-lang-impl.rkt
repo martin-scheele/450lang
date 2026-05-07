@@ -199,13 +199,13 @@
 ;; - ARITY-ERROR
 ;; - CIRCULAR-ERROR
 (struct ErrorResult [] #:transparent)
-(struct arity-err ErrorResult [] #:transparent)
+(struct arity-err ErrorResult [fn args] #:transparent)
 (struct undefined-var-err ErrorResult [name] #:transparent)
 (struct not-fn-err ErrorResult [val] #:transparent)
 (struct circular-err ErrorResult [val] #:transparent)
 (define ERROR-RESULT (ErrorResult))
 (define UNDEFINED-ERROR (undefined-var-err 'unknown))
-(define ARITY-ERROR (arity-err))
+(define ARITY-ERROR (arity-err 'unknown empty))
 (define NOT-FN-ERROR (not-fn-err 'unknown))
 (define CIRCULAR-ERROR (circular-err 'unknown))
 
@@ -423,15 +423,17 @@
    `((+ ,450+)
      (- ,450-)
     ; (* ,*)
-     (× ,450*)
-     ;(=== ,450=)
-     (~= ,450loose=)
-     (++ ,(lambda (x) (450+ x 1)))
-     (-- ,(lambda (x) (450- x 1)))
+     (* ,450*)
+     (=== ,450=)
+     ;(~= ,450loose=)
+     ;(++ ,(lambda (x) (450+ x 1)))
+     ;(-- ,(lambda (x) (450- x 1)))
      ;(chk= ,check-equal?) ; cant do this because we dont want errs propagating
      (cns ,cons)
+     (cns? ,cons?)
      (mt ,empty)
      (li ,list)
+     (li? ,list?)
      (< ,<)
      (<= ,<=)
      (> ,>)
@@ -439,8 +441,8 @@
      (¬ ,450not)
      (1st ,first)
      (2nd ,second)
-     ;(3rd ,third)
-     ;(4th ,fourth)
+     (3rd ,third)
+     (4th ,fourth)
      (rst ,rest)
      (len ,length)
      ;(π ,pi)
@@ -453,7 +455,9 @@
      ;(add-line ,add-line)
      ;(empty-image ,empty-image)
      ;(flip-vertical ,flip-vertical)
-     (star ,star)
+     (num? ,number?)
+     (str? ,string?)
+     ;(star ,star)
      [NaN? ,nan?]
      [CIRCULAR-ERR? ,circular-err?]
      [UNDEF-ERR? ,undefined-var-err?]
@@ -474,7 +478,7 @@
       [(lm-result params body fnenv)
        (if (= (length params) (length args))
            (run/env body (append (map list params args) fnenv))
-           ARITY-ERROR)]
+           (arity-err f args))]
       [(? undefined-var-err?) f]
       [_ (not-fn-err f)]))
 
@@ -638,7 +642,7 @@
    (eval450
     `(bind/rec [fac
                 (lm (n)
-                    (iffy n (× n (fac (- n 1))) 1))]
+                    (iffy n (* n (fac (- n 1))) 1))]
                (fac ,n)))
    (factorial n)))
 
