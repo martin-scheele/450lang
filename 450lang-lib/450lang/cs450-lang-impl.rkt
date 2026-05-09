@@ -78,6 +78,7 @@
 ;; - (str String)
 ;; - (boo Boolean)
 ;; - (ite AST AST AST)
+;; - (cnd List<Pair<AST>)
 ;; - (vari Symbol)
 ;; - (bind Symbol AST List<AST>)
 ;; - (recb Symbol AST List<AST>)
@@ -653,6 +654,8 @@
               16)
 (check-equal? (eval450 '(cond [(=== 1 2) x] [(=== 3 4) (5 5)] [else "no error"]))
               "no error")
+(check-equal? (eval450 '(cond [FALSE! ((lm [x] (x x)) (lm [x] (x x)))] [else "ran one branch"]))
+              "ran one branch")
 
 ;; check shadowing, proper variable capture
 
