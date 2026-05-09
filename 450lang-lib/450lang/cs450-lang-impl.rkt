@@ -27,6 +27,7 @@
 ;; - `(bind [,Var ,Expr] ,Expr)
 ;; - `(bind/rec [,Var ,Expr] ,Expr)
 ;; - `(iffy ,Expr ,Expr ,Expr)
+;; - `(cond ,TestPair ...)
 ;; - `(lm ,List<Var> ,Expr)
 ;; - `(∨ Expr ...)
 ;; - `(∧ Expr ...)
@@ -87,6 +88,7 @@
 (struct str AST [val] #:transparent)
 (struct boo AST [val] #:transparent)
 (struct ite AST [test then else] #:transparent)
+(struct cnd AST [testpairs] #:transparent)
 (struct vari AST [name] #:transparent)
 (struct bind AST [name expr body] #:transparent)
 (struct recb AST [name expr body] #:transparent)
@@ -129,12 +131,25 @@
 ;    [`(- ,x ,y) (sub (parse x) (parse y))]
 ;    [`(=== ,x ,y) (eq (parse x) (parse y))]
     [`(iffy ,tst ,thn ,els) (ite (parse tst) (parse thn) (parse els))]
+    [`(iffy . ,_)
+     (raise-syntax-error
+      'parse "invalid iffy syntax, expected: (iffy test then else)" s
+      #:exn exn:fail:syntax:cs450)]
+    [`(cond . ,testpairs) (if ((listof TestPair?) testpairs) ; if statement could be part of match pattern
+                              (parse/cond testpairs)
+                              (raise-syntax-error
+                               'parse "invalid cond syntax, expected: (cond [if-this then-that] ...)" s
+                               #:exn exn:fail:syntax:cs450))]
+    [`(cond . ,_)
+     (raise-syntax-error
+      'parse "invalid cond syntax, expected: (cond [if-this then-that] ...)" s
+      #:exn exn:fail:syntax:cs450)]
     [`(lm ,(and (list (? symbol?) ...) args) ,body) (lm-ast args (parse body))]
     #;[`(lm ,(and (list x ...)
                   (list (? symbol?) ...)) ,body) (lm-ast x (parse body))]
     [`(lm . ,_)
      (raise-syntax-error
-      'parse "invalid lm syntax, expected (lm (x ..) body)" s
+      'parse "invalid lm syntax, expected: (lm (x ..) body)" s
       #:exn exn:fail:syntax:cs450)]
     [`(chk= ,e1 ,e2) (chk=? (parse e1) (parse e2))]
     [`(chk ,e) (chktrue (parse e))]
@@ -148,6 +163,27 @@
     [_ (raise-syntax-error
         'parse "not a valid CS450 Lang program" s
         #:exn exn:fail:syntax:cs450)]))
+
+
+;; A TestPair is a `(,Expr ,Expr)
+;; used for cond statements
+(define (TestPair? x)
+  (and (list? x)
+       (= 2 (length x))))
+
+;; parse/cond : TestPairs -> AST
+(define/contract (parse/cond testpairs)
+  (-> (listof TestPair?) AST?)
+  ;; parse/else : shorts 'else to 'TRUE! in a cond test
+  (define (parse/else s)
+    (if (equal? 'else s)
+        (parse 'TRUE!)
+        (parse s)))
+  (cnd
+   (map (λ (test then) (list test then))
+        (map (compose parse/else first) testpairs)
+        (map (compose parse second) testpairs))))
+   
 
 (check-equal? (parse 1) (num 1))
 (check-equal? (parse '(+ 1 2))
@@ -171,6 +207,14 @@
               (ite (call (vari '===) (list (num 10) (num 10)))
                    (num 100)
                    (num 200)))
+(check-equal? (parse '(cond [(> 3 5) "three"] [(< 3 5) "five"] [else "none"]))
+              (cnd
+               (list (list (call (vari '>) (list (num 3) (num 5)))
+                           (str "three"))
+                     (list (call (vari '<) (list (num 3) (num 5)))
+                           (str "five"))
+                     (list (boo #t)
+                           (str "none")))))
 
 (check-equal? (parse '(bind [x 1] x))
               (bind 'x (num 1) (list (vari 'x))))
@@ -197,17 +241,24 @@
 ;; - ERROR-RESULT
 ;; - UNDEFINED-ERROR
 ;; - ARITY-ERROR
+;; - NOT-FN-ERROR
 ;; - CIRCULAR-ERROR
+;; - FAILED-COND-ERROR
 (struct ErrorResult [] #:transparent)
 (struct arity-err ErrorResult [fn args] #:transparent)
 (struct undefined-var-err ErrorResult [name] #:transparent)
 (struct not-fn-err ErrorResult [val] #:transparent)
 (struct circular-err ErrorResult [val] #:transparent)
+(struct failed-cond-err ErrorResult [] #:transparent)
 (define ERROR-RESULT (ErrorResult))
 (define UNDEFINED-ERROR (undefined-var-err 'unknown))
 (define ARITY-ERROR (arity-err 'unknown empty))
 (define NOT-FN-ERROR (not-fn-err 'unknown))
 (define CIRCULAR-ERROR (circular-err 'unknown))
+(define FAILED-COND-ERROR (failed-cond-err))
+
+;; What to return when a cond expression has no true entries
+(define COND-EXHAUSTED FAILED-COND-ERROR)
 
 (struct lm-result [params code env] #:transparent)
 
@@ -512,6 +563,15 @@
            (if (res->bool (run/env tst env))
                (run/env thn env)
                (run/env els env)))]
+      [(cnd testpairs)
+       ;; tries the first cond statement, if false, moves on
+       ;; until there is a true test or no more statements.
+       (define (try-cond tps)
+         (cond
+           [(empty? tps) COND-EXHAUSTED]
+           [(res->bool (run/env (first (first tps)) env)) (run/env (second (first tps)) env)]
+           [else (try-cond (rest tps))]))
+       (try-cond testpairs)]
       [(land args)
        (cond [(empty? args) #t]
              [(= (length args) 1) (run/env (first args) env)]
@@ -583,6 +643,16 @@
 (check-equal? (eval450 '(bind [x 1] x)) 1)
 (check-equal? (eval450 '(bind [x 1] (bind [y 2] (+ x y)))) 3)
 (check-equal? (eval450 '(bind [x (- 4 3)] (bind [y (+ 5 6)] (+ x y)))) 12)
+
+;; iffy and cond
+(check-equal? (eval450 '(iffy TRUE! "yup" "nope"))
+              "yup")
+(check-equal? (eval450 '(iffy 0 "yup" "nope"))
+              "nope")
+(check-equal? (eval450 '(cond [(> 0 2) (+ 4 4)] [(> 2 0) (+ 8 8)] [else (+ 16 16)]))
+              16)
+(check-equal? (eval450 '(cond [(=== 1 2) x] [(=== 3 4) (5 5)] [else "no error"]))
+              "no error")
 
 ;; check shadowing, proper variable capture
 
