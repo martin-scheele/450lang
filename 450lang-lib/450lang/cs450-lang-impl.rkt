@@ -136,11 +136,8 @@
      (raise-syntax-error
       'parse "invalid iffy syntax, expected: (iffy test then else)" s
       #:exn exn:fail:syntax:cs450)]
-    [`(cond . ,testpairs) (if ((listof TestPair?) testpairs) ; if statement could be part of match pattern
-                              (parse/cond testpairs)
-                              (raise-syntax-error
-                               'parse "invalid cond syntax, expected: (cond [if-this then-that] ...)" s
-                               #:exn exn:fail:syntax:cs450))]
+    [`(cond ,(? TestPair? testpairs) ...)
+     (parse/cond testpairs)]
     [`(cond . ,_)
      (raise-syntax-error
       'parse "invalid cond syntax, expected: (cond [if-this then-that] ...)" s
