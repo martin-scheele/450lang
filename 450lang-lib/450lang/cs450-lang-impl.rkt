@@ -181,7 +181,7 @@
         (parse 'TRUE!)
         (parse s)))
   (cnd
-   (map (λ (test then) (list test then))
+   (map list
         (map (compose parse/else first) testpairs)
         (map (compose parse second) testpairs))))
    
