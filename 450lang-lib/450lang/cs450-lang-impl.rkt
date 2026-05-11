@@ -11,11 +11,13 @@
          undefined-var-err
          arity-err
          not-fn-err
+         failed-cond-err
          (rename-out [nan? NaN?]
                      [circular-err? CIRCULAR-ERR?]
                      [undefined-var-err? UNDEF-ERR?]
                      [arity-err? ARITY-ERR?]
-                     [not-fn-err? NOT-FN-ERR?]))
+                     [not-fn-err? NOT-FN-ERR?]
+                     [failed-cond-err? FAILED-COND-ERR?]))
 
 (require rackunit)
 
