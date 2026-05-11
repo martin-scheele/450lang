@@ -29,7 +29,7 @@
 ;; - `(bind [,Var ,Expr] ,Expr)
 ;; - `(bind/rec [,Var ,Expr] ,Expr)
 ;; - `(iffy ,Expr ,Expr ,Expr)
-;; - `(cond ,TestPair ...)
+;; - `(cond [,Expr ,Expr ...] ...)
 ;; - `(lm ,List<Var> ,Expr)
 ;; - `(∨ Expr ...)
 ;; - `(∧ Expr ...)
@@ -80,7 +80,7 @@
 ;; - (str String)
 ;; - (boo Boolean)
 ;; - (ite AST AST AST)
-;; - (cnd List<Pair<AST>)
+;; - (cnd List<AST> List<List<AST>>)
 ;; - (vari Symbol)
 ;; - (bind Symbol AST List<AST>)
 ;; - (recb Symbol AST List<AST>)
@@ -91,7 +91,7 @@
 (struct str AST [val] #:transparent)
 (struct boo AST [val] #:transparent)
 (struct ite AST [test then else] #:transparent)
-(struct cnd AST [testpairs] #:transparent)
+(struct cnd AST [tests then-bodies] #:transparent)
 (struct vari AST [name] #:transparent)
 (struct bind AST [name expr body] #:transparent)
 (struct recb AST [name expr body] #:transparent)
@@ -138,8 +138,8 @@
      (raise-syntax-error
       'parse "invalid iffy syntax, expected: (iffy test then else)" s
       #:exn exn:fail:syntax:cs450)]
-    [`(cond ,(? TestPair? testpairs) ...)
-     (parse/cond testpairs)]
+    [`(cond [,tests ,then-bodies ...] ...)
+     (parse-cond tests then-bodies)]
     [`(cond . ,_)
      (raise-syntax-error
       'parse "invalid cond syntax, expected: (cond [if-this then-that] ...)" s
@@ -164,26 +164,16 @@
         'parse "not a valid CS450 Lang program" s
         #:exn exn:fail:syntax:cs450)]))
 
-
-;; A TestPair is a `(,Expr ,Expr)
-;; used for cond statements
-(define (TestPair? x)
-  (and (list? x)
-       (= 2 (length x))))
-
-;; parse/cond : TestPairs -> AST
-(define/contract (parse/cond testpairs)
-  (-> (listof TestPair?) AST?)
-  ;; parse/else : shorts 'else to 'TRUE! in a cond test
-  (define (parse/else s)
+;; parse-cond : List<AST> List<List<AST>> -> AST
+(define/contract (parse-cond tests then-bodies)
+  (-> list? (listof list?) AST?)
+  ;; parse-else : shorts 'else to 'TRUE! in a cond test
+  (define (parse-else s)
     (if (equal? 'else s)
         (parse 'TRUE!)
         (parse s)))
-  (cnd
-   (map list
-        (map (compose parse/else first) testpairs)
-        (map (compose parse second) testpairs))))
-   
+  (cnd (map parse-else tests)
+       (map (curry map parse) then-bodies)))
 
 (check-equal? (parse 1) (num 1))
 (check-equal? (parse '(+ 1 2))
@@ -208,13 +198,18 @@
                    (num 100)
                    (num 200)))
 (check-equal? (parse '(cond [(> 3 5) "three"] [(< 3 5) "five"] [else "none"]))
-              (cnd
-               (list (list (call (vari '>) (list (num 3) (num 5)))
-                           (str "three"))
-                     (list (call (vari '<) (list (num 3) (num 5)))
-                           (str "five"))
-                     (list (boo #t)
-                           (str "none")))))
+              (cnd (list (call (vari '>) (list (num 3) (num 5)))
+                         (call (vari '<) (list (num 3) (num 5)))
+                         (boo #t))
+                   (list (list (str "three"))
+                         (list (str "five"))
+                         (list (str "none")))))
+(check-equal? (parse '(cond [(> 0 2) (+ 1 1)] [else (+ 2 2) (+ 3 3)]))
+              (cnd (list (call (vari '>) (list (num 0) (num 2)))
+                         (boo #t))
+                   (list (list (call (vari '+) (list (num 1) (num 1))))
+                         (list (call (vari '+) (list (num 2) (num 2)))
+                               (call (vari '+) (list (num 3) (num 3)))))))
 
 (check-equal? (parse '(bind [x 1] x))
               (bind 'x (num 1) (list (vari 'x))))
@@ -522,89 +517,118 @@
 ;; Computes the result of running the given CS450Lang program AST
 (define/contract (run p)
   (-> AST? Result?)
+  (run/env p (INIT-ENV)))
 
-  (define (450apply f args)
-    (match f
-      [(? procedure?) (apply f args)]
-      [(lm-result params body fnenv)
-       (if (= (length params) (length args))
-           (run/env body (append (map list params args) fnenv))
-           (arity-err f args))]
-      [(? undefined-var-err?) f]
-      [_ (not-fn-err f)]))
+;; 450apply
+;; Applies a function to the given arguments
+(define (450apply f args)
+  (match f
+    [(? procedure?) (apply f args)]
+    [(lm-result params body fnenv)
+     (if (= (length params) (length args))
+         (run/env body (append (map list params args) fnenv))
+         (arity-err f args))]
+    [(? undefined-var-err?) f]
+    [_ (not-fn-err f)]))
 
-     ;; accumulator : env : Env
-  ;; invariant : represents variable bindings seen so far
-  (define (run/env p env)
-    (match p
-      [(num n) n]
-      [(str s) s]
-      [(boo b) b]
-      [(vari x) (lookup x env)]
-      #;[(bind x e body) (run/env body (env-add x (run/env e env) env))]
+;; run/env : 450LangAST -> 450LangResult
+;; accumulator : env : Env
+;; invariant : represents variable bindings seen so far
+(define (run/env p env)
+  (match p
+    [(num n) n]
+    [(str s) s]
+    [(boo b) b]
+    [(vari x) (lookup x env)]
+    #;[(bind x e body) (run/env body (env-add x (run/env e env) env))]
+    [(bind x e bodys)
+     (define new-env (env-add x (run/env e env) env))
+     (last
+      (map (curryr run/env new-env) bodys))]
+    [(recb x e bodys)
+     (define placeholder (box (circular-err x)))
+     (define env/placeholder (env-add x placeholder env))
+     (define x-result (run/env e env/placeholder))
+     (set-box! placeholder x-result)
+     (last
+      (map (curryr run/env env/placeholder) bodys))]
+;      [(add x y) (450+ (run/env x env) (run/env y env))]
+;      [(sub x y) (450- (run/env x env) (run/env y env))]
+;      [(eq x y) (450= (run/env x env) (run/env y env))]
+    [(ite tst thn els)
+     (define tst-res (run/env tst env))
+     (if (ErrorResult? tst-res)
+         tst-res
+         (if (res->bool (run/env tst env))
+             (run/env thn env)
+             (run/env els env)))]
+    [(cnd tests then-bodies)
+    ;; tries the first cond statement, if false, moves on
+    ;; until there is a true test or no more statements.
+     (define (try-cond tests then-bodies)
+       (cond
+         [(empty? tests) COND-EXHAUSTED]
+         [(res->bool (run/env (first tests) env))
+          (run-then-bodies (first then-bodies) env)]
+         [else (try-cond (rest tests) (rest then-bodies))]))
+     (try-cond tests then-bodies)]
+    [(land args)
+     (cond [(empty? args) #t]
+           [(= (length args) 1) (run/env (first args) env)]
+           [else
+            (let ([res (run/env (first args) env)])
+              (if (res->bool res)
+                  (run/env (land (rest args)) env)
+                  res))])]
+    [(lor args)
+     (cond [(empty? args) #f]
+           [(= (length args) 1) (run/env (first args) env)]
+           [else
+            (let ([res (run/env (first args) env)])
+              (if (res->bool res)
+                  res
+                  (run/env (lor (rest args)) env)))])]
+    [(lm-ast args body) (lm-result args body env)] ; dont eval body
+    [(call fn args)
+     (define fn-res (run/env fn env))
+     (if (ErrorResult? fn-res)
+         fn-res
+         (450apply
+          fn-res
+          (map (curryr run/env env) args)))]
+    [(chk=? expected actual)
+     (check-equal? (run/env expected env) (run/env actual env))]
+    [(chktrue tst) (check-true (run/env tst env))]
+    [(chkfalse tst) (check-false (run/env tst env))]
+    [(chkerr p? err)
+     (check-true ((run/env p? env) (run/env err env)))]))
+
+;; List<List<AST>> -> Result
+;; Invariant: (length tbs) > 0
+(define (run-then-bodies tbs env)
+  (cond
+    [(= 1 (length tbs)) (run/env (first tbs) env)]
+    [else (run-then-bodies (rest tbs) (run-then-body->env (first tbs) env))]))
+
+;; run-then-body->env
+;; runs the given then-body of a cond clause and returns the (possibly altered) environment
+(define (run-then-body->env tb env)
+  (match tb
       [(bind x e bodys)
        (define new-env (env-add x (run/env e env) env))
-       (last
-        (map (curryr run/env new-env) bodys))]
+       (map (curryr run/env new-env) bodys)
+       new-env]
       [(recb x e bodys)
        (define placeholder (box (circular-err x)))
        (define env/placeholder (env-add x placeholder env))
        (define x-result (run/env e env/placeholder))
        (set-box! placeholder x-result)
-       (last
-        (map (curryr run/env env/placeholder) bodys))]
-;      [(add x y) (450+ (run/env x env) (run/env y env))]
-;      [(sub x y) (450- (run/env x env) (run/env y env))]
-;      [(eq x y) (450= (run/env x env) (run/env y env))]
-      [(ite tst thn els)
-       (define tst-res (run/env tst env))
-       (if (ErrorResult? tst-res)
-           tst-res
-           (if (res->bool (run/env tst env))
-               (run/env thn env)
-               (run/env els env)))]
-      [(cnd testpairs)
-       ;; tries the first cond statement, if false, moves on
-       ;; until there is a true test or no more statements.
-       (define (try-cond tps)
-         (cond
-           [(empty? tps) COND-EXHAUSTED]
-           [(res->bool (run/env (first (first tps)) env)) (run/env (second (first tps)) env)]
-           [else (try-cond (rest tps))]))
-       (try-cond testpairs)]
-      [(land args)
-       (cond [(empty? args) #t]
-             [(= (length args) 1) (run/env (first args) env)]
-             [else
-              (let ([res (run/env (first args) env)])
-                (if (res->bool res)
-                    (run/env (land (rest args)) env)
-                    res))])]           
-      [(lor args)
-       (cond [(empty? args) #f]
-             [(= (length args) 1) (run/env (first args) env)]
-             [else
-              (let ([res (run/env (first args) env)])
-                (if (res->bool res)
-                    res
-                    (run/env (lor (rest args)) env)))])]           
-      [(lm-ast args body) (lm-result args body env)] ; dont eval body
-      [(call fn args)
-       (define fn-res (run/env fn env))
-       (if (ErrorResult? fn-res)
-           fn-res
-           (450apply
-            fn-res
-            (map (curryr run/env env) args)))]
-      [(chk=? expected actual)
-       (check-equal? (run/env expected env) (run/env actual env))]
-      [(chktrue tst) (check-true (run/env tst env))]
-      [(chkfalse tst) (check-false (run/env tst env))]
-      [(chkerr p? err)
-       (check-true ((run/env p? env) (run/env err env)))]
-  ))
+       (map (curryr run/env env/placeholder) bodys)
+       env/placeholder]
+      [_
+       (run/env tb env)
+       env]))
 
-  (run/env p (INIT-ENV)))
 
 (define eval450 (compose run parse))
 
@@ -655,6 +679,7 @@
               "no error")
 (check-equal? (eval450 '(cond [FALSE! ((lm [x] (x x)) (lm [x] (x x)))] [else "ran one branch"]))
               "ran one branch")
+(eval450 '(cond [else (bind/rec [f (lm (x y) (+ x y))] (f 1 2)) (f 2 3)]))
 
 ;; check shadowing, proper variable capture
 
