@@ -4,6 +4,7 @@
          run
          exn:fail:syntax:cs450?
          lm-result?
+         FnResult?
          INIT-ENV-add!
          INIT-ENV-show
          NaN ; TODO: don't provide (but makes testing easier)
@@ -11,11 +12,13 @@
          undefined-var-err
          arity-err
          not-fn-err
+         failed-cond-err
          (rename-out [nan? NaN?]
                      [circular-err? CIRCULAR-ERR?]
                      [undefined-var-err? UNDEF-ERR?]
                      [arity-err? ARITY-ERR?]
-                     [not-fn-err? NOT-FN-ERR?]))
+                     [not-fn-err? NOT-FN-ERR?]
+                     [failed-cond-err? FAILED-COND-ERR?]))
 
 (require rackunit)
 
@@ -224,7 +227,7 @@
 ;; - Boolean
 ;; - NaN
 ;; - ErrorResult
-;; - RacketFn
+;; - FnResult
 ;; Interp: possible results of a CS450Lang program
 ;; Note: NaN is a valid result, but not a valid program (for now)
 (struct nan [])
@@ -253,7 +256,16 @@
 ;; What to return when a cond expression has no true entries
 (define COND-EXHAUSTED FAILED-COND-ERROR)
 
+;; A FnResult is one of:
+;; - (Racket) function
+;; - (lm-result List<Var> AST Environment)
+
 (struct lm-result [params code env] #:transparent)
+
+(define (FnResult? x)
+  ((disjoin procedure?
+            lm-result?)
+   x))
 
 (define (Result? x)
   ((disjoin number?
@@ -261,8 +273,7 @@
             boolean?
             nan?
             ErrorResult?
-            procedure?
-            lm-result?
+            FnResult?
             list?
             image?
             void?) ; need void for testing forms
@@ -466,7 +477,7 @@
   (make-parameter
    `((+ ,450+)
      (- ,450-)
-    ; (* ,*)
+     ;(* ,*)
      (* ,450*)
      (=== ,450=)
      ;(~= ,450loose=)
@@ -507,7 +518,9 @@
      [UNDEF-ERR? ,undefined-var-err?]
      [ARITY-ERR? ,arity-err?]
      [NOT-FN-ERR? ,not-fn-err?]
+     [FAILED-COND-ERR ,failed-cond-err?]
      (lm-result? ,lm-result?)
+     (FnResult? ,FnResult?)
      )))
 
 
@@ -530,20 +543,22 @@
     (match tb
       [(bind x e bodys)
        (define new-env (env-add x (run/env e env) env))
-       (map (curryr run/env new-env) bodys)
+       (last
+        (map (curryr run/env new-env) bodys))
        new-env]
       [(recb x e bodys)
        (define placeholder (box (circular-err x)))
        (define env/placeholder (env-add x placeholder env))
        (define x-result (run/env e env/placeholder))
        (set-box! placeholder x-result)
-       (map (curryr run/env env/placeholder) bodys)
+       (last
+        (map (curryr run/env env/placeholder) bodys))
        env/placeholder]
       [_
        (run/env tb env)
        env]))
 
-  ;; 450apply :
+  ;; 450apply : FnResult List<Result> -> Result
   ;; Applies a function to the given arguments
   (define (450apply f args)
     (match f
@@ -576,9 +591,9 @@
        (set-box! placeholder x-result)
        (last
         (map (curryr run/env env/placeholder) bodys))]
-  ;      [(add x y) (450+ (run/env x env) (run/env y env))]
-  ;      [(sub x y) (450- (run/env x env) (run/env y env))]
-  ;      [(eq x y) (450= (run/env x env) (run/env y env))]
+      ;[(add x y) (450+ (run/env x env) (run/env y env))]
+      ;[(sub x y) (450- (run/env x env) (run/env y env))]
+      ;[(eq x y) (450= (run/env x env) (run/env y env))]
       [(ite tst thn els)
        (define tst-res (run/env tst env))
        (if (ErrorResult? tst-res)
@@ -587,8 +602,9 @@
                (run/env thn env)
                (run/env els env)))]
       [(cnd tests then-bodies)
-      ;; tries the first cond statement, if false, moves on
-      ;; until there is a true test or no more statements.
+       ;; evaluates the text-expr of the first cond-clause, if false moves on.
+       ;; until there is a true test-expr or no more clauses.
+       ;; invariant: (= (length tests) (length (then-bodies)))
        (define (try-cond tests then-bodies)
          (cond
            [(empty? tests) COND-EXHAUSTED]
@@ -624,7 +640,8 @@
       [(chktrue tst) (check-true (run/env tst env))]
       [(chkfalse tst) (check-false (run/env tst env))]
       [(chkerr p? err)
-       (check-true ((run/env p? env) (run/env err env)))]))
+       (check-true ((run/env p? env) (run/env err env)))]
+      ))
   (run/env p (INIT-ENV)))
 
 (define eval450 (compose run parse))
