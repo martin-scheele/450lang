@@ -27,10 +27,10 @@
 ;; A 450LangExpr (Expr) is one of
 ;; - Atom
 ;; - Variable
-;; - `(bind [,Var ,Expr] ,Expr)
-;; - `(bind/rec [,Var ,Expr] ,Expr)
+;; - `(bind [,Var ,Expr] ,Expr ...+)
+;; - `(bind/rec [,Var ,Expr] ,Expr ...+)
 ;; - `(iffy ,Expr ,Expr ,Expr)
-;; - `(cond [,Expr ,Expr ...] ...)
+;; - `(cond [,Expr ,Expr ...+] ...+)
 ;; - `(lm ,List<Var> ,Expr)
 ;; - `(∨ Expr ...)
 ;; - `(∧ Expr ...)
@@ -119,12 +119,12 @@
     ['TRUE! (boo true)]
     ['FALSE! (boo false)]
     [(? symbol?) (vari s)]
-    [`(bind [,x ,e] . ,bods) (bind x (parse e) (map parse bods))]
+    [`(bind [,x ,e] ,bods ..1) (bind x (parse e) (map parse bods))]
     [`(bind . ,_)
      (raise-syntax-error
       'parse "bind: invalid syntax, expected: (bind [x e] body)" s
       #:exn exn:fail:syntax:cs450)]
-    [`(bind/rec [,x ,e] . ,bods) (recb x (parse e) (map parse bods))]
+    [`(bind/rec [,x ,e] ,bods ..1) (recb x (parse e) (map parse bods))]
     [`(bind/rec . ,_)
      (raise-syntax-error
       'parse "bind/rec: invalid syntax, expected: (bind/rec [x e] body)" s
@@ -139,7 +139,7 @@
      (raise-syntax-error
       'parse "invalid iffy syntax, expected: (iffy test then else)" s
       #:exn exn:fail:syntax:cs450)]
-    [`(cond [,tests ,then-bodies ...] ...)
+    [`(cond [,tests ,then-bodies ..1] ..1)
      (parse-cond tests then-bodies)]
     [`(cond . ,_)
      (raise-syntax-error
@@ -543,18 +543,16 @@
     (match tb
       [(bind x e bodys)
        (define new-env (env-add x (run/env e env) env))
-       ;(last
-       (map (curryr run/env new-env) bodys)
-       ;)
+       (last
+        (map (curryr run/env new-env) bodys))
        new-env]
       [(recb x e bodys)
        (define placeholder (box (circular-err x)))
        (define env/placeholder (env-add x placeholder env))
        (define x-result (run/env e env/placeholder))
        (set-box! placeholder x-result)
-       ;(last
-       (map (curryr run/env env/placeholder) bodys)
-       ;)
+       (last
+        (map (curryr run/env env/placeholder) bodys))
        env/placeholder]
       [_
        (run/env tb env)
@@ -584,19 +582,15 @@
       #;[(bind x e body) (run/env body (env-add x (run/env e env) env))]
       [(bind x e bodys)
        (define new-env (env-add x (run/env e env) env))
-       ;(last
-       (map (curryr run/env new-env) bodys)
-       ;)
-      ]
+       (last
+        (map (curryr run/env new-env) bodys))]
       [(recb x e bodys)
        (define placeholder (box (circular-err x)))
        (define env/placeholder (env-add x placeholder env))
        (define x-result (run/env e env/placeholder))
        (set-box! placeholder x-result)
-       ;(last
-       (map (curryr run/env env/placeholder) bodys)
-        ;)
-      ]
+       (last
+        (map (curryr run/env env/placeholder) bodys))]
       ;[(add x y) (450+ (run/env x env) (run/env y env))]
       ;[(sub x y) (450- (run/env x env) (run/env y env))]
       ;[(eq x y) (450= (run/env x env) (run/env y env))]
@@ -699,7 +693,7 @@
               "no error")
 (check-equal? (eval450 '(cond [FALSE! ((lm [x] (x x)) (lm [x] (x x)))] [else "ran one branch"]))
               "ran one branch")
-(check-equal? (eval450 '(cond [else (bind/rec [f (lm (x y) (+ x y))]) (f 2 3)]))
+(check-equal? (eval450 '(cond [else (bind/rec [f (lm (x y) (+ x y))] f) (f 2 3)]))
               5)
 
 ;; check shadowing, proper variable capture
