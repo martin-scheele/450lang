@@ -529,34 +529,54 @@
 (define/contract (run p)
   (-> AST? Result?)
 
+  ;; last-res-or-first-err
+  ;; Returns the last result of the given bodies, or the first computed error
+  (define (last-res-or-first-err bodys env)
+    (cond
+      [(= 1 (length bodys)) (run/env (first bodys) env)]
+      [else
+       (define maybe-err (run/env (first bodys) env))
+       (if (ErrorResult? maybe-err)
+           maybe-err
+           (last-res-or-first-err (rest bodys) env))]))
+
   ;; run-then-bodies : List<List<AST>> -> Result
   ;; Invariant: (length tbs) > 0
-  ;; Runes the then-bodies of a cond-clause with persistent environment
+  ;; Runs the then-bodies of a cond-clause with persistent environment
   (define (run-then-bodies tbs env)
     (cond
-      [(= 1 (length tbs)) (run/env (first tbs) env)]
-      [else (run-then-bodies (rest tbs) (run-then-body->env (first tbs) env))]))
+      [(= 1 (length tbs))
+       (run/env (first tbs) env)]
+      [else
+       (define env-or-err (run-then-body->env-or-err (first tbs) env))
+       (if (ErrorResult? env-or-err)
+           env-or-err
+           (run-then-bodies (rest tbs) env-or-err))]))
 
   ;; run-then-body->env : AST -> Environment
   ;; runs the given then-body of a cond clause and returns the (possibly altered) environment
-  (define (run-then-body->env tb env)
+  (define (run-then-body->env-or-err tb env)
     (match tb
       [(bind x e bodys)
        (define new-env (env-add x (run/env e env) env))
-       (last
-        (map (curryr run/env new-env) bodys))
-       new-env]
+       (define maybe-err (last-res-or-first-err bodys new-env))
+       (if (ErrorResult? maybe-err)
+           maybe-err
+           new-env)]
       [(recb x e bodys)
        (define placeholder (box (circular-err x)))
        (define env/placeholder (env-add x placeholder env))
        (define x-result (run/env e env/placeholder))
        (set-box! placeholder x-result)
-       (last
-        (map (curryr run/env env/placeholder) bodys))
-       env/placeholder]
+       (define maybe-err (last-res-or-first-err bodys env/placeholder))
+       (if (ErrorResult? maybe-err)
+           maybe-err
+           env/placeholder)]
       [_
-       (run/env tb env)
-       env]))
+       (define maybe-err (run/env tb env))
+       (if (ErrorResult? maybe-err)
+           maybe-err
+           env)]))
 
   ;; 450apply : FnResult List<Result> -> Result
   ;; Applies a function to the given arguments
@@ -582,15 +602,13 @@
       #;[(bind x e body) (run/env body (env-add x (run/env e env) env))]
       [(bind x e bodys)
        (define new-env (env-add x (run/env e env) env))
-       (last
-        (map (curryr run/env new-env) bodys))]
+       (last-res-or-first-err bodys new-env)]
       [(recb x e bodys)
        (define placeholder (box (circular-err x)))
        (define env/placeholder (env-add x placeholder env))
        (define x-result (run/env e env/placeholder))
        (set-box! placeholder x-result)
-       (last
-        (map (curryr run/env env/placeholder) bodys))]
+       (last-res-or-first-err bodys env/placeholder)]
       ;[(add x y) (450+ (run/env x env) (run/env y env))]
       ;[(sub x y) (450- (run/env x env) (run/env y env))]
       ;[(eq x y) (450= (run/env x env) (run/env y env))]
@@ -602,7 +620,7 @@
                (run/env thn env)
                (run/env els env)))]
       [(cnd tests then-bodies)
-       ;; evaluates the text-expr of the first cond-clause, if false moves on.
+       ;; evaluates the text-expr of the first cond-clause, if false moves on
        ;; until there is a true test-expr or no more clauses.
        ;; invariant: (= (length tests) (length (then-bodies)))
        (define (try-cond tests then-bodies)
@@ -617,7 +635,8 @@
              [(= (length args) 1) (run/env (first args) env)]
              [else
               (let ([res (run/env (first args) env)])
-                (if (res->bool res) (run/env (land (rest args)) env)
+                (if (res->bool res)
+                    (run/env (land (rest args)) env)
                     res))])]
       [(lor args)
        (cond [(empty? args) #f]
@@ -695,6 +714,9 @@
               "ran one branch")
 (check-equal? (eval450 '(cond [else (bind/rec [f (lm (x y) (+ x y))] f) (f 2 3)]))
               5)
+(check-equal? (eval450 '(cond [else (bind/rec [f (lm (x y) (+ x y))] f) (bind/rec [g 3] g) (f 2 g)]))
+              5)
+(check-true (undefined-var-err? (eval450 '(cond [else (bind/rec [x 5] x) (+ x y) (+ x 1)]))))
 
 ;; check shadowing, proper variable capture
 
