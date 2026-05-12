@@ -543,16 +543,18 @@
     (match tb
       [(bind x e bodys)
        (define new-env (env-add x (run/env e env) env))
-       (last
-        (map (curryr run/env new-env) bodys))
+       ;(last
+       (map (curryr run/env new-env) bodys)
+       ;)
        new-env]
       [(recb x e bodys)
        (define placeholder (box (circular-err x)))
        (define env/placeholder (env-add x placeholder env))
        (define x-result (run/env e env/placeholder))
        (set-box! placeholder x-result)
-       (last
-        (map (curryr run/env env/placeholder) bodys))
+       ;(last
+       (map (curryr run/env env/placeholder) bodys)
+       ;)
        env/placeholder]
       [_
        (run/env tb env)
@@ -582,15 +584,19 @@
       #;[(bind x e body) (run/env body (env-add x (run/env e env) env))]
       [(bind x e bodys)
        (define new-env (env-add x (run/env e env) env))
-       (last
-        (map (curryr run/env new-env) bodys))]
+       ;(last
+       (map (curryr run/env new-env) bodys)
+       ;)
+      ]
       [(recb x e bodys)
        (define placeholder (box (circular-err x)))
        (define env/placeholder (env-add x placeholder env))
        (define x-result (run/env e env/placeholder))
        (set-box! placeholder x-result)
-       (last
-        (map (curryr run/env env/placeholder) bodys))]
+       ;(last
+       (map (curryr run/env env/placeholder) bodys)
+        ;)
+      ]
       ;[(add x y) (450+ (run/env x env) (run/env y env))]
       ;[(sub x y) (450- (run/env x env) (run/env y env))]
       ;[(eq x y) (450= (run/env x env) (run/env y env))]
